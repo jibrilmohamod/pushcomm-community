@@ -100,6 +100,7 @@ import com.pushcomm.ptt.ui.theme.PushcommTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import com.pushcomm.ptt.viewmodel.AppViewModel
 import com.pushcomm.ptt.viewmodel.MapViewModel
 import com.pushcomm.ptt.viewmodel.MessagesViewModel
@@ -550,6 +551,7 @@ private fun MainScreen(
     val activeSosId by appVm.activeSosId.collectAsState()
     val sosUiState by appVm.sosUiState.collectAsState()
     val loneWorkerRemaining by appVm.loneWorkerRemaining.collectAsState()
+    val mapState by mapVm.state.collectAsState()
 
     var selectedTab by remember { mutableStateOf(AppTab.PTT) }
 
@@ -558,6 +560,8 @@ private fun MainScreen(
     // opens the Lone Worker dialog and shows status (SOS active, LW countdown).
     var showLoneWorkerDialog by remember { mutableStateOf(false) }
     var showEmergencyControlsDialog by remember { mutableStateOf(false) }
+    var confirmManualSos by remember { mutableStateOf(false) }
+    var confirmCancelSos by remember { mutableStateOf(false) }
     var loneWorkerInput by remember { mutableStateOf("10") }
 
     LaunchedEffect(sosUiState.message, sosUiState.error) {
@@ -689,6 +693,45 @@ private fun MainScreen(
         return
     }
 
+    // Explicit confirmation prevents accidental test or emergency transmissions.
+    if (confirmManualSos) {
+        AlertDialog(
+            onDismissRequest = { confirmManualSos = false },
+            containerColor = ColorSurface,
+            title = { Text("Send emergency SOS?", color = Color.White) },
+            text = { Text("This will alert dispatch immediately. Use only for a real emergency or a coordinated test.", color = ColorTextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmManualSos = false
+                        val location = mapState.myLocation
+                        appVm.triggerSos(location?.latitude, location?.longitude)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ColorError),
+                ) { Text("Send SOS") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmManualSos = false }) { Text("Go back") }
+            },
+        )
+    }
+
+    if (confirmCancelSos) {
+        AlertDialog(
+            onDismissRequest = { confirmCancelSos = false },
+            containerColor = ColorSurface,
+            title = { Text("Cancel active SOS?", color = Color.White) },
+            text = { Text("Dispatch may already be responding. Cancel only if the situation is safe.", color = ColorTextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = { confirmCancelSos = false; appVm.cancelSos() },
+                    colors = ButtonDefaults.buttonColors(containerColor = ColorError),
+                ) { Text("Confirm cancellation") }
+            },
+            dismissButton = { TextButton(onClick = { confirmCancelSos = false }) { Text("Keep SOS active") } },
+        )
+    }
+
     // ── Lone Worker dialog ────────────────────────────────────────────────────
     if (showEmergencyControlsDialog) {
         AlertDialog(
@@ -726,7 +769,7 @@ private fun MainScreen(
                 if (activeSosId != null) {
                     Button(
                         onClick = {
-                            appVm.cancelSos()
+                            confirmCancelSos = true
                             showEmergencyControlsDialog = false
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = ColorError),
@@ -846,6 +889,39 @@ private fun MainScreen(
         bottomBar = {
             Column {
                 if (selectedTab == AppTab.PTT) {
+                    // Manual SOS: hold for 3 seconds, then explicitly confirm.
+                    // Existing backend records the alert and reports its acknowledgement.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (activeSosId != null) ColorError else ColorError.copy(alpha = 0.85f))
+                            .pointerInput(activeSosId, sosUiState.loading, session.loggedIn) {
+                                detectTapGestures(
+                                    onPress = {
+                                        if (!session.loggedIn || sosUiState.loading) return@detectTapGestures
+                                        if (activeSosId != null) {
+                                            showEmergencyControlsDialog = true
+                                            return@detectTapGestures
+                                        }
+                                        // Releasing before 3 seconds cancels activation.
+                                        val released = withTimeoutOrNull(3_000L) { tryAwaitRelease() }
+                                        if (released == null) confirmManualSos = true
+                                    },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (activeSosId != null) "SOS ACTIVE • Tap for controls"
+                            else "SOS • Hold 3 seconds",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                        )
+                    }
                     // Lone Worker / status bar.
                     // Tap → open Lone Worker dialog (or emergency controls if SOS / LW already active).
                     // SOS is fired from the on-screen control (or a paired hardware key).
