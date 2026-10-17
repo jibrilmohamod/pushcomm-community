@@ -1,0 +1,22 @@
+name: Temporary Traccar website image download
+on:
+  push:
+    paths:
+      - '.github/workflows/traccar-site-images-temp.yml'
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retrieve official Traccar documentation images
+        run: |
+          mkdir -p website-images
+          curl -fsSL --retry 3 'https://www.traccar.org/images/homepage-hero.webp' -o website-images/01-traccar-platform.webp
+          curl -fsSL --retry 3 'https://www.traccar.org/images/documentation/notifications/web.png' -o website-images/02-sos-event.png
+          curl -fsSL --retry 3 'https://www.traccar.org/images/documentation/geofences/polyline.png' -o website-images/03-route-geofence.png
+          curl -fsSL --retry 3 'https://www.traccar.org/images/documentation/notifications/test.png' -o website-images/04-notification-settings.png
+          file website-images/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: traccar-site-images
+          path: website-images/*
+          retention-days: 1
